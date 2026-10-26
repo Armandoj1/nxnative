@@ -1,0 +1,63 @@
+# nxnative en Codemagic: descarga tus NSP de Google Drive, genera el IPA y lo sube a Drive.
+# Va en la raíz de TU fork de https://github.com/seedds/nxnative
+#
+# Secretos (Codemagic → tu app → Environment variables, grupo "nxnative_secrets", marcados como Secret):
+#   RCLONE_CONF_B64  = tu rclone.conf en base64 (acceso a tu Google Drive)
+#   PROD_KEYS_B64    = tu prod.keys en base64
+#
+# En Google Drive: crea la carpeta  nxnative/juego  y pon ahí los NSP (juego base + actualización).
+# El IPA aparecerá en  nxnative/ipa
+
+workflows:
+  nxnative-ipa:
+    name: nxnative IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 120
+    environment:
+      groups:
+        - nxnative_secrets
+      vars:
+        DRIVE_GAME: "gdrive:nxnative/juego"
+        DRIVE_OUT: "gdrive:nxnative/ipa"
+      xcode: latest
+    scripts:
+      - name: Instalar herramientas
+        script: |
+          set -e
+          brew install xcodegen zstd spirv-cross rclone
+          brew install --cask dotnet-sdk
+          python3 -m pip install lz4 capstone fonttools \
+            || python3 -m pip install --break-system-packages lz4 capstone fonttools
+          xcodebuild -downloadComponent MetalToolchain
+          echo "PATH=$PATH:/usr/local/share/dotnet" >> $CM_ENV
+
+      - name: Preparar secretos
+        script: |
+          set -e
+          mkdir -p ~/.config/rclone ~/keys
+          echo "$RCLONE_CONF_B64" | base64 --decode > ~/.config/rclone/rclone.conf
+          echo "$PROD_KEYS_B64"   | base64 --decode > ~/keys/prod.keys
+
+      - name: Descargar NSP de Google Drive
+        script: |
+          set -e
+          mkdir -p ~/Games/juego
+          rclone copy "$DRIVE_GAME" ~/Games/juego --include "*.nsp" --transfers 4 --stats 30s --stats-one-line
+          ls -lh ~/Games/juego
+
+      - name: Generar IPA
+        script: |
+          set -e
+          mkdir -p ~/out
+          python3 scripts/build_ipa_from_nsp.py ~/Games/juego -k ~/keys/prod.keys \
+            -o ~/out/nxnative.ipa --no-keep-extracted --progress lines
+          ls -lh ~/out
+
+      - name: Subir IPA a Google Drive
+        script: |
+          set -e
+          rclone copy ~/out "$DRIVE_OUT" --include "*.ipa" --stats 30s --stats-one-line
+
+      - name: Borrar claves y juegos
+        script: |
+          rm -rf ~/Games ~/keys ~/.config/rclone
