@@ -61,3 +61,51 @@ workflows:
       - name: Borrar claves y juegos
         script: |
           rm -rf ~/Games ~/keys ~/.config/rclone
+
+  # Parchea el IPA que ya esta en Drive: mete el permiso Increased Memory Limit en el ejecutable
+  # (firma ad-hoc con entitlements). Impactor lo lee y lo pide a Apple al firmar con tu cuenta.
+  nxnative-mem-patch:
+    name: nxnative parche memoria
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      groups:
+        - nxnative_secrets
+      vars:
+        DRIVE_OUT: "gdrive:nxnative/ipa"
+    scripts:
+      - name: Preparar rclone
+        script: |
+          set -e
+          brew install rclone
+          mkdir -p ~/.config/rclone
+          echo "$RCLONE_CONF_B64" | base64 --decode > ~/.config/rclone/rclone.conf
+      - name: Descargar IPA
+        script: |
+          set -e
+          mkdir -p ~/p
+          rclone copyto "$DRIVE_OUT/nxnative.ipa" ~/p/nxnative.ipa --stats 30s --stats-one-line
+          ls -lh ~/p
+      - name: Meter el permiso de memoria
+        script: |
+          set -e
+          cd ~/p
+          unzip -q -o nxnative.ipa 'Payload/*.app/Info.plist'
+          APP=$(ls -d Payload/*.app | head -1)
+          EXE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
+          echo "app: $APP  ejecutable: $EXE"
+          unzip -q -o nxnative.ipa "$APP/$EXE"
+          printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' '<plist version="1.0"><dict><key>com.apple.developer.kernel.increased-memory-limit</key><true/></dict></plist>' > ent.plist
+          codesign -f -s - --entitlements ent.plist "$APP/$EXE"
+          echo "permisos del ejecutable:"; codesign -d --entitlements - "$APP/$EXE"
+          zip -q nxnative.ipa "$APP/$EXE"
+          mv nxnative.ipa nxnative-memoria.ipa
+          unzip -l nxnative-memoria.ipa | tail -1
+          ls -lh nxnative-memoria.ipa
+      - name: Subir IPA parcheado a Drive
+        script: |
+          set -e
+          rclone copyto ~/p/nxnative-memoria.ipa "$DRIVE_OUT/nxnative-memoria.ipa" --stats 30s --stats-one-line
+      - name: Limpiar
+        script: |
+          rm -rf ~/p ~/.config/rclone
